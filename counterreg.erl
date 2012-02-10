@@ -5,13 +5,12 @@
 %%% To know who to contact, use another round-robin counter that
 %%% gradually iterates over all available workers as time goes,
 %%% assuring an even distribution of requests.
--module(counter).
+-module(counterreg).
 -export([start/1, get_resource/1, put_resource/2, update/1, stop/0]).
 
 start(Num) ->
     Heir = spawn(fun() -> timer:sleep(infinity) end),
     dispatch_table = ets:new(dispatch_table, [named_table, set, public, {heir,Heir,handover}, {write_concurrency,true}]),
-    worker_table = ets:new(worker_table, [named_table, set, public, {heir,Heir,handover}, {read_concurrency,true}]),
     true = ets:insert(dispatch_table, {ct,0}),
     [start_watcher(N) || N <- lists:seq(1,Num)],
     Num.
@@ -19,8 +18,7 @@ start(Num) ->
 get_resource(Num) ->
     case is_free(Id = dispatch_id(Num)) of
         true ->
-            [{_,Pid}] = ets:lookup(worker_table, Id),
-            sync(Pid, {get,self()});
+            sync(get_name(Id), {get,self()});
         false ->
             busy
     end.
@@ -29,12 +27,11 @@ put_resource(_Num, {Pid,Resource}) ->
     async(Pid, {put, Resource}).
 
 stop() ->
-    ets:foldl(fun({size,_},_) ->
+    ets:foldl(fun({ct,_},_) ->
                     ok;
-                 ({_,Pid},_) ->
-                    sync(Pid,stop)
-    end, [], worker_table),
-    ets:delete(worker_table),
+                 ({Id,_},_) ->
+                    sync(get_name(Id), stop)
+    end, [], dispatch_table),
     ets:delete(dispatch_table).
 
 start_watcher(Id) ->
@@ -48,7 +45,7 @@ start_watcher(Id) ->
     end.
 
 init_watcher(Id,Parent,Ref) ->
-    ets:insert(worker_table, {Id, self()}),
+    register(get_name(Id), self()),
     ets:insert(dispatch_table, {Id, 0}),
     Parent ! Ref,
     Res = make_ref(),
@@ -129,3 +126,6 @@ is_free(Id) ->
 
 set_free(Id) ->
     ets:insert(dispatch_table, {Id,0}).
+
+get_name(Id) ->
+    list_to_atom("counterreg"++integer_to_list(Id)).
